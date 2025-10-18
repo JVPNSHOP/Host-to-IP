@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="my">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>JK VIP VPN Host → IP (DNS) Lookup</title>
+  <meta name="description" content="Simple DNS lookup (A, AAAA, CNAME, MX, TXT, NS, PTR) using DNS over HTTPS. Runs entirely in your browser." />
+  <style>
+    :root{--bg:#0b0d12;--card:#11151c;--muted:#8a98a8;--text:#e8eef6;--brand:#6ee7ff;--ok:#42d392;--err:#ff6b6b}
+    *{box-sizing:border-box}
+    body{margin:0;font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial; background:linear-gradient(180deg,#0b0d12 0%,#0c111a 100%); color:var(--text)}
+    .container{max-width:880px;margin:40px auto;padding:0 16px}
+    header{display:flex;align-items:center;gap:12px;margin-bottom:16px}
+    h1{font-size:clamp(22px,4vw,34px);margin:0}
+    .tag{font-size:12px;color:var(--muted);border:1px solid #233041;padding:2px 8px;border-radius:9999px}
+    .card{background:var(--card);border:1px solid #1f2a37;border-radius:18px;padding:18px;box-shadow:0 10px 30px rgba(0,0,0,.25)}
+    .row{display:grid;grid-template-columns:1fr 130px 140px;gap:10px}
+    @media (max-width:720px){.row{grid-template-columns:1fr 1fr}}
+    input,select,button{width:100%;padding:12px 14px;border-radius:12px;border:1px solid #223140;background:#0d121a;color:var(--text);outline:none}
+    input::placeholder{color:#6b7c90}
+    button{cursor:pointer;background:linear-gradient(180deg,#182233,#121a27);border:1px solid #273447;font-weight:600}
+    button:hover{filter:brightness(1.08)}
+    .primary{border-color:#1c5a72}
+    .go{background:linear-gradient(180deg,#0b3b4a,#062b36);border-color:#0f4b5e}
+    .muted{color:var(--muted);font-size:14px;margin-top:10px}
+    .result{margin-top:18px}
+    .pill{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border:1px solid #2a3a4d;border-radius:9999px;font-size:12px;color:#b8c6d8}
+    .grid{display:grid;gap:12px}
+    .table{width:100%;border-collapse:separate;border-spacing:0 8px}
+    .table th{color:#9fb0c3;text-align:left;font-weight:600;font-size:13px;padding:0 10px}
+    .table td{background:#0e141d;border:1px solid #1f2a37;border-left-width:1px;border-right-width:1px;padding:10px;border-radius:12px}
+    .rowline td:first-child{border-radius:12px 0 0 12px}
+    .rowline td:last-child{border-radius:0 12px 12px 0}
+    .status{font-size:14px;margin-top:10px}
+    .ok{color:var(--ok)} .err{color:var(--err)}
+    .flex{display:flex;gap:8px;flex-wrap:wrap}
+    .tools{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+    .link{font-size:12px;color:var(--brand);text-decoration:none}
+    .copy{font-size:12px;border-radius:10px;padding:6px 10px}
+    .footer{color:#6f8196;font-size:12px;margin:28px 4px}
+    code.inline{background:#0e141d;border:1px solid #1f2a37;padding:2px 6px;border-radius:6px}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>JK VIP VPN Host → IP (DNS) Lookup</h1>
+      <span class="tag">Client-side · DoH</span>
+      <span class="tag">GitHub Pages</span>
+    </header>
+
+    <div class="card grid" role="search" aria-label="DNS search">
+      <div class="row">
+        <input id="host" class="primary" placeholder="e.g. example.com or 1.2.3.4 (for PTR)" autocomplete="off" />
+        <select id="type" aria-label="Record type">
+          <option value="A">A (IPv4)</option>
+          <option value="AAAA">AAAA (IPv6)</option>
+          <option value="CNAME">CNAME</option>
+          <option value="MX">MX</option>
+          <option value="TXT">TXT</option>
+          <option value="NS">NS</option>
+          <option value="PTR">PTR (reverse)</option>
+        </select>
+        <button id="btn" class="go" aria-label="Resolve">Resolve</button>
+      </div>
+      <div class="tools">
+        <button id="share" class="copy">Share link</button>
+        <button id="copyjson" class="copy">Copy JSON</button>
+        <span class="pill">Resolver: <strong id="resolver">Google DoH</strong></span>
+        <span class="pill">Latency: <span id="latency">–</span> ms</span>
+        <span class="pill">Cached: <span id="cached">no</span></span>
+      </div>
+      <div class="muted">
+        Tip: PTR reverse lookup လုပ်ချင်ရင် IP ထည့်ပြီး Record type ကို <code class="inline">PTR</code> လို့ရွေးပါ။
+      </div>
+
+      <div id="status" class="status"></div>
+
+      <div class="result">
+        <table class="table" aria-live="polite">
+          <thead>
+            <tr><th>Answer</th><th>TTL</th><th>Type</th></tr>
+          </thead>
+        <tbody id="tbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="footer">
+      Admin: JueHtet မှစေတနာဖြင့်ပြုလုပ်ထားပါသည်
+    </div>
+  </div>
+
+  <script>
+    // ---------- Utilities ----------
+    const $ = (id) => document.getElementById(id);
+    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+    const DOMAIN_RE = /^(?=.{1,253}$)(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))*\.?$/;
+    const IPV4_RE = /^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$/;
+    const IPV6_RE = /^([0-9a-f]{0,4}:){2,7}[0-9a-f]{0,4}$/i;
+
+    // Cache (5 minutes)
+    const CACHE_TTL_MS = 5 * 60 * 1000;
+    const cacheKey = (host, type) => `dns:${host}:${type}`;
+    const readCache = (host, type) => {
+      try {
+        const raw = localStorage.getItem(cacheKey(host, type));
+        if (!raw) return null;
+        const data = JSON.parse(raw);
+        if (Date.now() - data.t > CACHE_TTL_MS) return null;
+        return data.v;
+      } catch { return null; }
+    };
+    const writeCache = (host, type, value) => {
+      try { localStorage.setItem(cacheKey(host, type), JSON.stringify({ t: Date.now(), v: value })); } catch {}
+    };
+
+    // Fetch with timeout & fallback
+    async function dohQueryGoogle(name, type) {
+      const url = `https://dns.google/resolve?name=${encodeURIComponent(name)}&type=${encodeURIComponent(type)}`;
+      const t0 = performance.now();
+      const res = await fetch(url, { headers: { "accept": "application/dns-json" } });
+      const json = await res.json();
+      const t1 = performance.now();
+      return { json, ms: Math.round(t1 - t0), resolver: "Google DoH" };
+    }
+    async function dohQueryCloudflare(name, type) {
+      const url = `https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(name)}&type=${encodeURIComponent(type)}`;
+      const t0 = performance.now();
+      const res = await fetch(url, { headers: { "accept": "application/dns-json" } });
+      const json = await res.json();
+      const t1 = performance.now();
+      return { json, ms: Math.round(t1 - t0), resolver: "Cloudflare DoH" };
+    }
+    async function dohResolve(name, type, timeoutMs = 7000) {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+      try {
+        let out;
+        try {
+          out = await dohQueryGoogle(name, type);
+        } catch {
+          out = await dohQueryCloudflare(name, type);
+        }
+        return out;
+      } finally { clearTimeout(timer); }
+    }
+
+    // PTR helper: IPv4 -> in-addr.arpa / IPv6 -> ip6.arpa (simple form)
+    function toPtrName(input) {
+      if (IPV4_RE.test(input)) {
+        return input.split('.').reverse().join('.') + '.in-addr.arpa';
+      }
+      // If user already provides ip6.arpa, just use it as-is.
+      if (typeof input === 'string' && input.endsWith('.ip6.arpa')) return input;
+      if (IPV6_RE.test(input)) {
+        // For browser-only version, we keep IPv6 PTR simple:
+        throw new Error('IPv6 PTR အတွက် ip6.arpa ဗီထုဖွင့် (e.g., d.c.b.a...ip6.arpa) ဖြင့်ရိုက်ထည့်ပါ။');
+      }
+      return input; // maybe they typed a domain
+    }
+
+    function validInput(host, type) {
+      if (type === 'PTR') {
+        if (IPV4_RE.test(host) || host.endsWith('.in-addr.arpa') || host.endsWith('.ip6.arpa')) return true;
+        $('status').innerHTML = `<span class="err">PTR အတွက် IPv4 (သို့) *.in-addr.arpa / *.ip6.arpa name ထည့်ရန်လိုအပ်သည်။</span>`;
+        return false;
+      }
+      if (IPV4_RE.test(host) || IPV6_RE.test(host)) {
+        $('status').innerHTML = `<span class="err">${type} အတွက် host name ထည့်ပါ (ဥပမာ example.com)။ IP မဟုတ်ပါ။</span>`;
+        return false;
+      }
+      if (!DOMAIN_RE.test(host)) {
+        $('status').innerHTML = `<span class="err">Hostname မမှန်ကန်ပါ။</span>`;
+        return false;
+      }
+      return true;
+    }
+
+    function setStatus(text, ok=false) {
+      $('status').innerHTML = ok ? `<span class="ok">✔ ${text}</span>` : `<span class="">${text}</span>`;
+    }
+
+    function renderAnswers(answers) {
+      const tbody = $('tbody');
+      tbody.innerHTML = '';
+      if (!answers || answers.length === 0) {
+        tbody.innerHTML = '<tr class="rowline"><td colspan="3">No answers.</td></tr>';
+        return;
+      }
+      const tmap = {1:'A', 2:'NS', 5:'CNAME', 6:'SOA', 12:'PTR', 15:'MX', 16:'TXT', 28:'AAAA'};
+      for (const a of answers) {
+        const ttl = a.TTL ?? a.ttl ?? '';
+        const type = tmap[a.type] || a.type || '';
+        let val = a.data || a.Value || a.value || '';
+        if (type === 'TXT' && Array.isArray(val)) val = val.join(' ');
+        const tr = document.createElement('tr');
+        tr.className = 'rowline';
+        tr.innerHTML = `<td>${escapeHtml(String(val))}</td><td>${ttl}</td><td>${type}</td>`;
+        tbody.appendChild(tr);
+      }
+    }
+
+    function escapeHtml(s) {
+      return s.replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+    }
+
+    async function resolveNow() {
+      const host = $('host').value.trim();
+      let type = $('type').value;
+      $('cached').innerText = 'no';
+      $('latency').innerText = '–';
+      setStatus('Resolving…');
+      $('resolver').innerText = 'Google DoH';
+
+      if (!host) { setStatus('Host name ထည့်ပါ။', false); return; }
+      if (!validInput(host, type)) return;
+
+      let qHost = host;
+      if (type === 'PTR') {
+        try { qHost = toPtrName(host); }
+        catch (e) { $('status').innerHTML = `<span class="err">${escapeHtml(e.message)}</span>`; return; }
+      }
+
+      // Cache
+      const cached = readCache(qHost, type);
+      if (cached) {
+        $('cached').innerText = 'yes';
+        $('resolver').innerText = cached.resolver || 'cache';
+        $('latency').innerText = cached.ms ?? '—';
+        renderAnswers(cached.Answer || []);
+        setStatus(`Results from cache for ${qHost} (${type})`, true);
+        return;
+      }
+
+      try {
+        const { json, ms, resolver } = await dohResolve(qHost, type);
+        $('resolver').innerText = resolver;
+        $('latency').innerText = String(ms);
+        if (json.Status !== 0) {
+          const m = (json.Comment || json.status || 'NXDOMAIN / No Answer');
+          $('tbody').innerHTML = '';
+          $('status').innerHTML = `<span class="err">DNS error: ${escapeHtml(String(m))} (rcode ${json.Status})</span>`;
+          writeCache(qHost, type, { ...json, ms, resolver });
+          return;
+        }
+        renderAnswers(json.Answer || []);
+        setStatus(`OK — ${qHost} (${type})`, true);
+        writeCache(qHost, type, { ...json, ms, resolver });
+      } catch (e) {
+        $('status').innerHTML = `<span class="err">Request failed: ${escapeHtml(e.message || e)}</span>`;
+      }
+    }
+
+    // Share & Copy
+    function makeShareUrl(host, type) {
+      const u = new URL(window.location.href);
+      u.searchParams.set('host', host);
+      u.searchParams.set('type', type);
+      return u.toString();
+    }
+    async function copy(text) {
+      try { await navigator.clipboard.writeText(text); return true; } catch { return false; }
+    }
+
+    $('btn').addEventListener('click', resolveNow);
+    $('type').addEventListener('change', () => {
+      if ($('host').value.trim()) resolveNow();
+    });
+    $('host').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') resolveNow();
+    });
+    $('share').addEventListener('click', async () => {
+      const host = $('host').value.trim();
+      const type = $('type').value;
+      if (!host) return;
+      const url = makeShareUrl(host, type);
+      if (await copy(url)) setStatus('Share URL copied ✓', true);
+    });
+    $('copyjson').addEventListener('click', async () => {
+      const host = $('host').value.trim();
+      const type = $('type').value;
+      if (!host) return;
+      const qHost = (type==='PTR') ? (IPV4_RE.test(host) ? toPtrName(host) : host) : host;
+      const key = cacheKey(qHost, type);
+      const raw = localStorage.getItem(key);
+      if (!raw) { setStatus('No cached JSON to copy yet.', false); return; }
+      if (await copy(JSON.stringify(JSON.parse(raw).v, null, 2))) setStatus('JSON copied ✓', true);
+    });
+
+    // On load: hydrate from URL
+    (function initFromQuery(){
+      const url = new URL(window.location.href);
+      const h = url.searchParams.get('host');
+      const t = url.searchParams.get('type') || 'A';
+      if (h) $('host').value = h;
+      $('type').value = (t || 'A').toUpperCase();
+      if (h) resolveNow();
+    })();
+  </script>
+</body>
+</html>
